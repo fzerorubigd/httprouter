@@ -77,13 +77,17 @@
 package httprouter
 
 import (
+	"context"
 	"net/http"
 )
 
 // Handle is a function that can be registered to a route to handle HTTP
 // requests. Like http.HandlerFunc, but has a third parameter for the values of
 // wildcards (variables).
-type Handle func(http.ResponseWriter, *http.Request, Params)
+type Handle func(context.Context, http.ResponseWriter, *http.Request)
+
+// ContextInit is a function to create new context for the system
+type ContextInit func() context.Context
 
 // Param is a single URL parameter, consisting of a key and a value.
 type Param struct {
@@ -110,7 +114,8 @@ func (ps Params) ByName(name string) string {
 // Router is a http.Handler which can be used to dispatch requests to different
 // handler functions via configurable routes
 type Router struct {
-	trees map[string]*node
+	context ContextInit
+	trees   map[string]*node
 
 	// Enables automatic redirection if the current route can't be matched but a
 	// handler for the path with (without) the trailing slash exists.
@@ -158,16 +163,20 @@ type Router struct {
 	// 500 (Internal Server Error).
 	// The handler can be used to keep your server from crashing because of
 	// unrecovered panics.
-	PanicHandler func(http.ResponseWriter, *http.Request, interface{})
+	PanicHandler func(context.Context, http.ResponseWriter, *http.Request)
 }
 
 // Make sure the Router conforms with the http.Handler interface
-var _ http.Handler = New()
+var _ http.Handler = New(nil)
 
 // New returns a new initialized Router.
 // Path auto-correction, including trailing slashes, is enabled by default.
-func New() *Router {
+func New(init ContextInit) *Router {
+	if init == nil {
+		init = func() context.Context { return context.Background() }
+	}
 	return &Router{
+		context:                init,
 		RedirectTrailingSlash:  true,
 		RedirectFixedPath:      true,
 		HandleMethodNotAllowed: true,
@@ -240,7 +249,7 @@ func (r *Router) Handle(method, path string, handle Handle) {
 // request handle.
 func (r *Router) Handler(method, path string, handler http.Handler) {
 	r.Handle(method, path,
-		func(w http.ResponseWriter, req *http.Request, _ Params) {
+		func(_ context.Context, w http.ResponseWriter, req *http.Request) {
 			handler.ServeHTTP(w, req)
 		},
 	)
@@ -269,15 +278,15 @@ func (r *Router) ServeFiles(path string, root http.FileSystem) {
 
 	fileServer := http.FileServer(root)
 
-	r.GET(path, func(w http.ResponseWriter, req *http.Request, ps Params) {
-		req.URL.Path = ps.ByName("filepath")
+	r.GET(path, func(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+		req.URL.Path = ParamsFromCtx(ctx).ByName("filepath")
 		fileServer.ServeHTTP(w, req)
 	})
 }
 
 func (r *Router) recv(w http.ResponseWriter, req *http.Request) {
 	if rcv := recover(); rcv != nil {
-		r.PanicHandler(w, req, rcv)
+		r.PanicHandler(withPanicCtx(r.context(), rcv), w, req)
 	}
 }
 
@@ -341,7 +350,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	if root := r.trees[req.Method]; root != nil {
 		if handle, ps, tsr := root.getValue(path); handle != nil {
-			handle(w, req, ps)
+			handle(withParam(r.context(), ps), w, req)
 			return
 		} else if req.Method != "CONNECT" && path != "/" {
 			code := 301 // Permanent redirect, request with GET method

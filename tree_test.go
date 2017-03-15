@@ -5,6 +5,7 @@
 package httprouter
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -26,7 +27,7 @@ func printChildren(n *node, prefix string) {
 var fakeHandlerValue string
 
 func fakeHandler(val string) Handle {
-	return func(http.ResponseWriter, *http.Request, Params) {
+	return func(context.Context, http.ResponseWriter, *http.Request) {
 		fakeHandlerValue = val
 	}
 }
