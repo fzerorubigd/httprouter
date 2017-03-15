@@ -83,7 +83,7 @@ import (
 // Handle is a function that can be registered to a route to handle HTTP
 // requests. Like http.HandlerFunc, but has a third parameter for the values of
 // wildcards (variables).
-type Handle func(http.ResponseWriter, *http.Request, Params)
+type Handle func(http.ResponseWriter, *http.Request)
 
 // Param is a single URL parameter, consisting of a key and a value.
 type Param struct {
@@ -158,7 +158,7 @@ type Router struct {
 	// 500 (Internal Server Error).
 	// The handler can be used to keep your server from crashing because of
 	// unrecovered panics.
-	PanicHandler func(http.ResponseWriter, *http.Request, interface{})
+	PanicHandler func(http.ResponseWriter, *http.Request)
 }
 
 // Make sure the Router conforms with the http.Handler interface
@@ -240,7 +240,7 @@ func (r *Router) Handle(method, path string, handle Handle) {
 // request handle.
 func (r *Router) Handler(method, path string, handler http.Handler) {
 	r.Handle(method, path,
-		func(w http.ResponseWriter, req *http.Request, _ Params) {
+		func(w http.ResponseWriter, req *http.Request) {
 			handler.ServeHTTP(w, req)
 		},
 	)
@@ -269,7 +269,8 @@ func (r *Router) ServeFiles(path string, root http.FileSystem) {
 
 	fileServer := http.FileServer(root)
 
-	r.GET(path, func(w http.ResponseWriter, req *http.Request, ps Params) {
+	r.GET(path, func(w http.ResponseWriter, req *http.Request) {
+		ps := ParamsFromCtx(req)
 		req.URL.Path = ps.ByName("filepath")
 		fileServer.ServeHTTP(w, req)
 	})
@@ -277,7 +278,7 @@ func (r *Router) ServeFiles(path string, root http.FileSystem) {
 
 func (r *Router) recv(w http.ResponseWriter, req *http.Request) {
 	if rcv := recover(); rcv != nil {
-		r.PanicHandler(w, req, rcv)
+		r.PanicHandler(w, withPanicCtx(req, rcv))
 	}
 }
 
@@ -341,7 +342,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	if root := r.trees[req.Method]; root != nil {
 		if handle, ps, tsr := root.getValue(path); handle != nil {
-			handle(w, req, ps)
+			handle(w, withParam(req, ps))
 			return
 		} else if req.Method != "CONNECT" && path != "/" {
 			code := 301 // Permanent redirect, request with GET method
